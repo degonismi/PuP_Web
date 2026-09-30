@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <!-- Added to the home screen, iOS opens the page without the browser bars. -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="PuP">
+    <title>PuP</title>
+    <link rel="shortcut icon" href="TemplateData/favicon.ico">
+    <link rel="apple-touch-icon" href="TemplateData/icons/unity-logo-dark.png">
+    <link rel="stylesheet" href="TemplateData/style.css">
+    <link rel="manifest" href="manifest.webmanifest">
+  </head>
+  <body>
+    <div id="unity-container">
+      <div id="unity-fullscreen-container">
+        <canvas id="unity-canvas" width="960" height="600" tabindex="-1"></canvas>
+        <div id="unity-loading-container">
+          <div id="unity-loading-bar">
+            <div id="unity-logo"></div>
+            <div id="unity-progress-bar-empty">
+              <div id="unity-progress-bar-full"></div>
+            </div>
+            <div id="unity-loading-text"></div>
+          </div>
+        </div>
+      </div>
+      <div id="unity-warning"> </div>
+      <div id="rotate-hint">Поверните телефон горизонтально</div>
+    </div>
+    <script>
+      var container = document.querySelector("#unity-container");
+      var canvas = document.querySelector("#unity-canvas");
+      var loadingContainer = document.querySelector("#unity-loading-container");
+      var progressBarFull = document.querySelector("#unity-progress-bar-full");
+      var loadingText = document.querySelector("#unity-loading-text");
+      var warningBanner = document.querySelector("#unity-warning");
+      var search = new URLSearchParams(location.search);
+
+      // A temporary banner for a few seconds, or a permanent error message over the canvas if type == 'error'.
+      function unityShowBanner(msg, type) {
+        function updateBannerVisibility() {
+          warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
+        }
+        var div = document.createElement('div');
+        div.innerHTML = msg;
+        warningBanner.appendChild(div);
+        if (type == 'error') div.style = 'background: red; padding: 10px;';
+        else {
+          if (type == 'warning') div.style = 'background: yellow; padding: 10px;';
+          setTimeout(function() {
+            warningBanner.removeChild(div);
+            updateBannerVisibility();
+          }, 5000);
+        }
+        updateBannerVisibility();
+      }
+
+      function showProgress(progress, text) {
+        loadingContainer.style.display = "block";
+        progressBarFull.style.width = 100 * progress + "%";
+        loadingText.textContent = text || "";
+      }
+
+      var buildUrl = "Build";
+      var loaderUrl = buildUrl + "/WebGL.loader.js";
+      var config = {
+        arguments: [],
+        frameworkUrl: buildUrl + "/WebGL.framework.js.unityweb",
+        codeUrl: buildUrl + "/WebGL.wasm.unityweb",
+        streamingAssetsUrl: "StreamingAssets",
+        fullscreenElementID: "unity-fullscreen-container",
+        companyName: "DefaultCompany",
+        productName: "PuP",
+        productVersion: "0.1.0",
+        showBanner: unityShowBanner,
+      };
+
+      // Phones have 3 screen pixels per point: the canvas renders at most 2, or ?dpr=… from the address.
+      var maxPixelRatio = parseFloat(search.get("dpr")) || 2;
+      config.devicePixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio);
+
+      // Git hosts take files up to 100 MB, so the build step may split the data file into parts; they are glued back
+      // into one blob here. The build step writes the number of parts into the next line.
+      var dataParts = 3;
+      var dataUrl = buildUrl + "/WebGL.data.unityweb";
+
+      function loadDataUrl() {
+        if (!dataParts) return Promise.resolve(dataUrl);
+        var received = new Array(dataParts).fill(0);
+        var sizes = new Array(dataParts).fill(0);
+        function report() {
+          var total = sizes.reduce(function (a, b) { return a + b; }, 0);
+          var done = received.reduce(function (a, b) { return a + b; }, 0);
+          var megabytes = Math.round(done / 1048576) + (total ? " / " + Math.round(total / 1048576) : "") + " МБ";
+          showProgress(total ? .9 * done / total : 0, "Загрузка " + megabytes);
+        }
+        function fetchPart(index) {
+          return fetch(dataUrl + ".part" + index).then(function (response) {
+            if (!response.ok) throw new Error("Part " + index + ": HTTP " + response.status);
+            sizes[index] = parseInt(response.headers.get("Content-Length")) || 0;
+            if (!response.body) return response.blob();
+            var reader = response.body.getReader();
+            var chunks = [];
+            function pump() {
+              return reader.read().then(function (step) {
+                if (step.done) return new Blob(chunks);
+                chunks.push(step.value);
+                received[index] += step.value.length;
+                report();
+                return pump();
+              });
+            }
+            return pump();
+          });
+        }
+        var parts = [];
+        for (var i = 0; i < dataParts; i++) parts.push(fetchPart(i));
+        return Promise.all(parts).then(function (blobs) { return URL.createObjectURL(new Blob(blobs)); });
+      }
+
+
+      var script = document.createElement("script");
+      script.src = loaderUrl;
+      script.onload = () => {
+        showProgress(0, "");
+        loadDataUrl().then((url) => {
+          config.dataUrl = url;
+          return createUnityInstance(canvas, config, (progress) => {
+            if (progress < 1) showProgress(dataParts ? .9 + .1 * progress : progress, dataParts ? "Запуск…" : "");
+            else loadingContainer.style.display = "none";
+          });
+        }).then((unityInstance) => {
+        }).catch((message) => {
+          alert(message);
+        });
+      };
+      document.body.appendChild(script);
+    </script>
+  </body>
+</html>
